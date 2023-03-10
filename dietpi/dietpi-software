@@ -1508,6 +1508,13 @@ Available commands:
 		aSOFTWARE_DESC[$software_id]='contribute to a decentralized internet'
 		aSOFTWARE_CATX[$software_id]=19
 		aSOFTWARE_DOCS[$software_id]='https://dietpi.com/docs/software/distributed_projects/#ipfs-node'
+        #-----------------
+		software_id=206
+		aSOFTWARE_NAME[$software_id]='microblog.pub'
+		aSOFTWARE_DESC[$software_id]='A self-hosted, single-user, ActivityPub powered microblog.'
+		aSOFTWARE_CATX[$software_id]=19
+		aSOFTWARE_DOCS[$software_id]='https://docs.microblog.pub/'
+        aSOFTWARE_INTERACTIVE[$software_id]=1
 
 		# SSH Clients
 		#--------------------------------------------------------------------------------
@@ -11040,6 +11047,120 @@ _EOF_
 			fi
 		fi
 
+        if To_Install 206 # microblog.pub
+        then
+            ## 1. Create a python environment py3.10 via pyenc
+            ##    see: https://python-poetry.org/docs/managing-environments/
+            local micro_pyenv="/home/dietpi/.pyenv_microblog"
+            local micro_pyenv_activate="$micro_pyenv/pyenv-activate.sh"
+            local micro_pyenv_activation=". $micro_pyenv_activate"
+			local micro_python_version='3.10.7'
+            local micro_dir="/home/dietpi/microblog"
+            local micro_virtualenv_info="$micro_dir/.virtualpath"
+            local micro_systemd="/etc/systemd/system/microblog-pub.service"
+            local micro_functions="/etc/profile.d/microblog_pub.sh"
+
+            Download_Install 'https://github.com/pyenv/pyenv/archive/master.tar.gz'
+            G_EXEC mv pyenv-master $micro_pyenv
+
+			# Generate script to activate pyenv
+			echo "#!/bin/dash
+export PYENV_ROOT='$micro_pyenv'
+export PATH=\"\$PYENV_ROOT/bin:\$PATH\"
+eval \"\$(pyenv init --path)\"
+eval \"\$(pyenv init -)\"
+PS1=\"(microblog.pub) $PS1\"
+" > $micro_pyenv_activate
+
+            ## Install Python 3.10 and Poetry
+			G_EXEC_DESC='Installing Python with into pyenv'
+			G_EXEC_OUTPUT=1 G_EXEC dash -c "
+$micro_pyenv_activation
+pyenv install $micro_python_version
+pyenv local $micro_python_version
+pip3 install --no-cache-dir -U pip setuptools wheel
+exec pip3 install --no-cache-dir poetry"
+
+            ## 2. Clone the Repo into location, copy over default config
+            G_EXEC git clone https://git.sr.ht/~tsileo/microblog.pub $micro_dir
+
+            ## Install the dependencies (this will take a while)
+            ## Also extract the VENV path for the systemd script later
+            G_EXEC_OUTPUT=1 G_EXEC dash -c "
+$micro_pyenv_activation
+cd $micro_dir
+poetry install
+## Skip these for now:
+## - poetry run inv configuration-wizard
+## - poetry run inv migrate-db
+poetry env info | grep -oP '(?<=^Path:\s).*/virtualenvs/.*' | xargs echo > $micro_virtualenv_info
+"
+            # ## Local configuration:
+            # ## - From user we need: username@domain, Name, Desc, isHTTPS
+			# local username
+            # local domainname
+			# local invalid_entry=
+			# while :
+			# do
+			# 	if G_WHIP_INPUTBOX "${invalid_entry}Please enter your desired microblog.pub USERNAME@DOMAIN" && [[ $G_WHIP_RETURNED_VALUE =~ ^[a-zA-Z0-9]+@[a-zA-Z0-9.]+$ ]]
+			# 	then
+            #         username=$(echo "$G_WHIP_RETURNED_VALUE" | grep -oP '^.*(?=@)')
+            #         domainname=$(echo "$G_WHIP_RETURNED_VALUE" | grep -oP '(?<=@).*')
+			# 		break
+			# 	else
+			# 		invalid_entry='[ERROR] Please enter a valid USERNAME@DOMAIN . Please retry...\n\n'
+			# 	fi
+			# done
+            # ## Edit: This is unnecessary, there is a perfectly good configuration-wizard which does a better job at generating passwords and secrets
+            # ##       Let's just use a default config, and then provide the user a way to edit it later via helpful shell functions.
+           
+            ##
+            ## 3. Generate functions for later configuration and install to profile
+            cat << _EOF_ > $micro_functions
+#!/bin/bash
+
+micropub_venv (){
+   $micro_pyenv_activation
+   cd $micro_dir
+}
+
+micropub_configure (){
+   micropub_venv
+   poetry run inv configuration-wizard
+   poetry run inv migrate-db
+   cd -
+   deactivate
+}
+
+micropub_update (){
+   micropub_venv
+   git pull
+   poetry run inv update
+   cd -
+   deactivate
+}
+
+_EOF_
+            ## 4. Generate systemd script
+            cat << _EOF_ > $micro_systemd
+[Unit]
+Description=Microblog.pub
+Wants=network-online.target
+After=network-online.target mariadb.service
+
+[Service]
+SyslogIdentifier=Microblog.pub
+ExecStart=poetry run supervisord -c misc/supervisord.conf -n
+Environment="VENV=$(cat $micro_virtualenv_info)"
+RestartForceExitStatus=100
+
+[Install]
+WantedBy=multi-user.target
+_EOF_
+
+
+        fi
+
 		if To_Install 157 # Home Assistant
 		then
 			local ha_user='homeassistant'
@@ -13567,6 +13688,25 @@ _EOF_
 
 			G_DIETPI-NOTIFY 2 'Home Assistant data and settings are not removed.\n - You may want to do this manually: rm -R /mnt/dietpi_userdata/homeassistant'
 		fi
+
+        if To_Uninstall 206 # microblog.pub
+        then
+            local micro_pyenv="/home/dietpi/.pyenv_microblog"
+            local micro_dir="/home/dietpi/microblog"
+            local micro_virtualenv_info="$micro_dir/.virtualpath"
+            local micro_systemd="/etc/systemd/system/microblog-pub.service"
+            local micro_functions="/etc/profile.d/microblog_pub.sh"
+
+            if [[ -f "$micro_systemd" ]]
+            then
+				G_EXEC systemctl disable --now microblog-pub
+				G_EXEC rm "$micro_systemd"
+            fi
+            [[ -f "$micro_functions" ]] && G_EXEC rm "$micro_functions"
+            [[ -f "$micro_virtualenv_info" ]] && G_EXEC rm "$micro_virtualenv_info"
+
+            G_DIETPI-NOTIFY 2 'All microblog.pub data and settings are still retained.\n - You can remove these manually: rm -R $micro_dir'
+        fi
 
 		if To_Uninstall 140 # Domoticz
 		then
