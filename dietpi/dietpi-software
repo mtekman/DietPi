@@ -11055,11 +11055,12 @@ _EOF_
 			local micro_pyenv_activation=". $micro_pyenv_activate_file"
 			local micro_python_version='3.10.7'
 			local micro_dir="/home/dietpi/microblog"
-			local micro_virtualenv_info="$micro_dir/.virtualpath"
 			local micro_systemd="/etc/systemd/system/microblog-pub.service"
 			local micro_functions="/etc/bashrc.d/microblog_pub.sh"
 
-			G_EXEC_OUTPUT=1 G_EXEC git clone https://git.sr.ht/~tsileo/microblog.pub $micro_dir
+			if ! [ -d $micro_dir ]; then
+				G_EXEC_OUTPUT=1 G_EXEC git clone https://git.sr.ht/~tsileo/microblog.pub $micro_dir
+			fi
 			G_EXEC_OUTPUT=1 G_EXEC chown -R dietpi:dietpi $micro_dir
 
 			## 1. Clone the Repo into location, copy over default config
@@ -11098,7 +11099,7 @@ poetry install
 ## Skip these for now:
 ## - poetry run inv configuration-wizard
 ## - poetry run inv migrate-db
-poetry env info | grep -oP '(?<=^Path:\s).*/virtualenvs/.*' | xargs echo > $micro_virtualenv_info
+## - poetry env info | grep -oP '(?<=^Path:\s).*/virtualenvs/.*' | xargs echo
 "
 			##
 			## 3. Generate functions for later configuration and install to profile
@@ -11110,11 +11111,11 @@ micropub_venv () {
 }
 
 micropub_configure (){
-	bash --init-file "$micro_pyenv_activate_file" -c "cd $micro_dir && poetry run inv configuration-wizard && poetry run inv migrate-db"
+	bash -c "source $micro_pyenv_activate_file; cd $micro_dir && poetry run inv configuration-wizard && poetry run inv migrate-db"
 }
 
 micropub_update (){
-	bash --init-file "$micro_pyenv_activate_file" -c "cd $micro_dir && git pull && poetry run inv update"
+	bash -c "source $micro_pyenv_activate_file; cd $micro_dir && git pull && poetry run inv update"
 }
 
 _EOF_
@@ -11123,13 +11124,13 @@ _EOF_
 [Unit]
 Description=Microblog.pub
 Wants=network-online.target
-After=network-online.target mariadb.service
+After=network-online.target
 
 [Service]
 User=dietpi
 SyslogIdentifier=Microblog.pub
-ExecStart=poetry run supervisord -c misc/supervisord.conf -n
-Environment="VENV=$(cat $micro_virtualenv_info)"
+ExecStart=sh -c "source $micro_pyenv_activate_file; poetry run supervisord -c misc/supervisord.conf -n"
+WorkingDirectory="$micro_dir"
 RestartForceExitStatus=100
 
 [Install]
@@ -13670,7 +13671,6 @@ _EOF_
 		then
 			local micro_pyenv="/home/dietpi/.pyenv_microblog"
 			local micro_dir="/home/dietpi/microblog"
-			local micro_virtualenv_info="$micro_dir/.virtualpath"
 			local micro_systemd="/etc/systemd/system/microblog-pub.service"
 			local micro_functions="/etc/bashrc.d/microblog_pub.sh"
 
@@ -13680,7 +13680,6 @@ _EOF_
 				G_EXEC rm "$micro_systemd"
 			fi
 			[[ -f "$micro_functions" ]] && G_EXEC rm "$micro_functions"
-			[[ -f "$micro_virtualenv_info" ]] && G_EXEC rm "$micro_virtualenv_info"
 			[[ -d "$micro_pyenv" ]] && G_EXEC rm -R "$micro_pyenv"
 			G_DIETPI-NOTIFY 2 "All microblog.pub data and settings are still retained.\n - You can remove these manually: rm -R $micro_dir"
 		fi
