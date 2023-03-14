@@ -11061,7 +11061,7 @@ _EOF_
 			if ! [ -d $micro_dir ]; then
 				G_EXEC_OUTPUT=1 G_EXEC git clone https://git.sr.ht/~tsileo/microblog.pub $micro_dir
 			fi
-			G_EXEC_OUTPUT=1 G_EXEC chown -R dietpi:dietpi $micro_dir
+			G_EXEC_OUTPUT=0 G_EXEC chown -R dietpi:dietpi $micro_dir
 
 			## 1. Clone the Repo into location, copy over default config
 			Download_Install 'https://github.com/pyenv/pyenv/archive/master.tar.gz'
@@ -11070,7 +11070,7 @@ _EOF_
 			G_EXEC mv pyenv-master $micro_pyenv_dir
 			G_EXEC chown -R dietpi:dietpi $micro_pyenv_dir
 
-			# Generate script to activate pyenv
+			# 2. Generate script to activate pyenv
 			echo "#!/bin/dash
 cd $micro_pyenv_dir
 export PYENV_ROOT='$micro_pyenv_dir'
@@ -11089,9 +11089,8 @@ pyenv local $micro_python_version
 pip3 install --no-cache-dir -U pip setuptools wheel
 exec pip3 install --no-cache-dir poetry"
 
-			## Install the dependencies (this will take a while)
-			## Also extract the VENV path for the systemd script later
-			G_EXEC_OUTPUT=1 G_EXEC sudo -u dietpi dash -c "
+			G_EXEC_DESC='Installing Poetry dependencies (can take a while)'
+			G_EXEC_OUTPUT=0 G_EXEC sudo -u dietpi dash -c "
 $micro_pyenv_activation
 cd $micro_dir
 pyenv local $micro_python_version
@@ -11106,16 +11105,24 @@ poetry install
 			cat << _EOF_ > $micro_functions
 #!/bin/bash
 
-micropub_venv () {
-	bash --init-file "$micro_pyenv_activate_file"
-}
+microblog_pub (){
+	case \$1 in
+		v*) bash --init-file "$micro_pyenv_activate_file";;  ## venv
+		c*) bash -c "source $micro_pyenv_activate_file; cd $micro_dir && poetry run inv configuration-wizard && poetry run inv migrate-db";; ## configure
+		u*) bash -c "source $micro_pyenv_activate_file; cd $micro_dir && git pull && poetry run inv update";; ## update
+		*) echo "Micropub helper script
 
-micropub_configure (){
-	bash -c "source $micro_pyenv_activate_file; cd $micro_dir && poetry run inv configuration-wizard && poetry run inv migrate-db"
-}
+    usage:  \$0  <venv|configure|update>
 
-micropub_update (){
-	bash -c "source $micro_pyenv_activate_file; cd $micro_dir && git pull && poetry run inv update"
+where:
+   configure   runs the configuration wizard and updates the microblog environment.
+   update      pulls the latest changes from the microblog repository and reconfigures.
+   venv        starts a virtual environment where the microblog can be configured.
+" && exit 255;;
+	esac
+
+	sudo systemctl restart microblog-pub
+
 }
 
 _EOF_
@@ -11129,14 +11136,15 @@ After=network-online.target
 [Service]
 User=dietpi
 SyslogIdentifier=Microblog.pub
-ExecStart=sh -c "source $micro_pyenv_activate_file; poetry run supervisord -c misc/supervisord.conf -n"
-WorkingDirectory="$micro_dir"
+ExecStart=sh -c "source $micro_pyenv_activate_file; cd $micro_dir; poetry run supervisord -c misc/supervisord.conf -n"
+WorkingDirectory=$micro_dir
 RestartForceExitStatus=100
 
 [Install]
 WantedBy=multi-user.target
 _EOF_
 
+			G_EXEC_DESC "In order to complete the microblog-pub installation, you need to run 'microblog_pub configure' in a new bash shell!"
 		fi
 
 		if To_Install 157 # Home Assistant
