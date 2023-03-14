@@ -11052,9 +11052,9 @@ _EOF_
 			##	  see: https://python-poetry.org/docs/managing-environments/
 			local micro_pyenv_dir="/home/dietpi/.pyenv_microblog"
 			local micro_pyenv_activate_file="$micro_pyenv_dir/pyenv-activate.sh"
-			local micro_pyenv_activation=". $micro_pyenv_activate_file"
 			local micro_python_version='3.10.7'
 			local micro_dir="/home/dietpi/microblog"
+			local micro_virtualenv="/home/dietpi/microblog/.virtual_path"
 			local micro_systemd="/etc/systemd/system/microblog-pub.service"
 			local micro_functions="/etc/bashrc.d/microblog_pub.sh"
 
@@ -11077,13 +11077,14 @@ export PYENV_ROOT='$micro_pyenv_dir'
 export PATH=\"\$PYENV_ROOT/bin:\$PATH\"
 eval \"\$(pyenv init --path)\"
 eval \"\$(pyenv init -)\"
+cd $micro_dir
 PS1=\"(microblog.pub) \$PS1\" " > "$micro_pyenv_activate_file"
 			G_EXEC chown dietpi:dietpi $micro_pyenv_activate_file
 
 			## Install Python 3.10 and Poetry
 			G_EXEC_DESC='Installing Python with into pyenv'
 			G_EXEC_OUTPUT=1 G_EXEC sudo -u dietpi dash -c "
-$micro_pyenv_activation
+source $micro_pyenv_activate_file
 pyenv install $micro_python_version
 pyenv local $micro_python_version
 pip3 install --no-cache-dir -U pip setuptools wheel
@@ -11091,16 +11092,17 @@ exec pip3 install --no-cache-dir poetry"
 
 			G_EXEC_DESC='Installing Poetry dependencies (can take a while)'
 			G_EXEC_OUTPUT=0 G_EXEC sudo -u dietpi dash -c "
-$micro_pyenv_activation
-cd $micro_dir
+source $micro_pyenv_activate_file
 pyenv local $micro_python_version
 poetry install
 ## Skip these for now:
 ## - poetry run inv configuration-wizard
 ## - poetry run inv migrate-db
-## - poetry env info | grep -oP '(?<=^Path:\s).*/virtualenvs/.*' | xargs echo
+poetry env info | grep -oP '(?<=^Path:\s).*/virtualenvs/.*' | xargs echo > $micro_virtualenv
 "
-			##
+			if [ "$(cat $micro_virtualenv)" = "" ]; then
+				echo "Unable to locate virtualenv" && exit 255
+			fi
 			## 3. Generate functions for later configuration and install to profile
 			cat << _EOF_ > $micro_functions
 #!/bin/bash
@@ -11108,17 +11110,17 @@ poetry install
 microblog_pub (){
 	case \$1 in
 		v*) bash --init-file "$micro_pyenv_activate_file";;  ## venv
-		c*) bash -c "source $micro_pyenv_activate_file; cd $micro_dir && poetry run inv configuration-wizard && poetry run inv migrate-db";; ## configure
-		u*) bash -c "source $micro_pyenv_activate_file; cd $micro_dir && git pull && poetry run inv update";; ## update
+		c*) bash -c "source $micro_pyenv_activate_file; poetry run inv configuration-wizard && poetry run inv migrate-db";; ## configure
+		u*) bash -c "source $micro_pyenv_activate_file; git pull && poetry run inv update";; ## update
 		*) echo "Micropub helper script
 
-    usage:  \$0  <venv|configure|update>
+    usage:  microblog_pub  <venv|configure|update>
 
 where:
    configure   runs the configuration wizard and updates the microblog environment.
    update      pulls the latest changes from the microblog repository and reconfigures.
    venv        starts a virtual environment where the microblog can be configured.
-" && exit 255;;
+" && return;;
 	esac
 
 	sudo systemctl restart microblog-pub
@@ -11129,22 +11131,24 @@ _EOF_
 			## 4. Generate systemd script
 			cat << _EOF_ > $micro_systemd
 [Unit]
-Description=Microblog.pub
+Description=Microblog.pub Web Service
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 User=dietpi
 SyslogIdentifier=Microblog.pub
-ExecStart=sh -c "source $micro_pyenv_activate_file; cd $micro_dir; poetry run supervisord -c misc/supervisord.conf -n"
+ExecStart=bash -c "source $micro_pyenv_activate_file; poetry run supervisord -c misc/supervisord.conf -n"
 WorkingDirectory=$micro_dir
+Environment="VENV_DIR=$(cat $micro_virtualenv)"
 RestartForceExitStatus=100
 
 [Install]
 WantedBy=multi-user.target
 _EOF_
 
-			G_EXEC_DESC "In order to complete the microblog-pub installation, you need to run 'microblog_pub configure' in a new bash shell!"
+			G_EXEC systemctl start microblog-pub
+			G_EXEC_DESC="In order to complete the microblog-pub installation, you need to run 'microblog_pub configure' in a new bash shell!"
 		fi
 
 		if To_Install 157 # Home Assistant
